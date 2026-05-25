@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COSMIC ZOOM GALAXY</title>
+    <style>
+        :root {
+            --bg: #000005;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg);
+            overflow: hidden;
+            font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+            height: 100vh;
+            width: 100vw;
+            cursor: crosshair;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui-overlay {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            opacity: 0.7;
+            transition: opacity 0.6s;
+        }
+
+        .ui-hint {
+            color: rgba(180, 200, 255, 0.8);
+            font-size: 13px;
+            letter-spacing: 0.06em;
+            text-align: center;
+            text-shadow: 0 0 12px rgba(140, 160, 255, 0.5);
+            transition: all 0.5s;
+        }
+
+        .ui-hint span {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(180, 200, 255, 0.2);
+            border-radius: 16px;
+            padding: 6px 14px;
+            margin: 0 3px;
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .ui-title {
+            position: fixed;
+            top: 28px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            pointer-events: none;
+            font-size: 15px;
+            letter-spacing: 0.14em;
+            color: rgba(200, 210, 255, 0.65);
+            text-shadow: 0 0 20px rgba(150, 170, 255, 0.45);
+            transition: opacity 0.8s;
+        }
+
+        @media (max-width: 600px) {
+            .ui-hint {
+                font-size: 10px;
+            }
+            .ui-hint span {
+                padding: 4px 10px;
+                font-size: 9px;
+            }
+            .ui-title {
+                font-size: 12px;
+                top: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="galaxyCanvas"></canvas>
+    <div class="ui-title">✦ COSMIC ZOOM GALAXY ✦</div>
+    <div class="ui-overlay" id="uiHints">
+        <div class="ui-hint">
+            <span>🖱 Scroll</span> Zoom &nbsp;
+            <span>✦ Move</span> Parallax &nbsp;
+            <span>🖱 Drag</span> Pan &nbsp;
+            <span>💫 Click</span> Burst
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const canvas = document.getElementById('galaxyCanvas');
+            const ctx = canvas.getContext('2d');
+            const uiHints = document.getElementById('uiHints');
+
+            // ─────────────────────────────────────
+            // CANVAS SETUP
+            // ─────────────────────────────────────
+            let W, H, centerX, centerY;
+
+            function resizeCanvas() {
+                const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                W = window.innerWidth;
+                H = window.innerHeight;
+                canvas.width = W * dpr;
+                canvas.height = H * dpr;
+                canvas.style.width = W + 'px';
+                canvas.style.height = H + 'px';
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.scale(dpr, dpr);
+                centerX = W / 2;
+                centerY = H / 2;
+            }
+
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            // ─────────────────────────────────────
+            // GLOW SPRITE PRE-RENDERING
+            // ─────────────────────────────────────
+            const glowSprites = {};
+            const glowSizes = [4, 8, 16, 32, 64, 128];
+
+            function createGlowSprite(size) {
+                const offCanvas = document.createElement('canvas');
+                offCanvas.width = size * 2 + 4;
+                offCanvas.height = size * 2 + 4;
+                const octx = offCanvas.getContext('2d');
+                const half = offCanvas.width / 2;
+                const gradient = octx.createRadialGradient(half, half, size * 0.08, half, half, size);
+                gradient.addColorStop(0, 'rgba(255,255,255,1)');
+                gradient.addColorStop(0.06, 'rgba(255,252,245,0.95)');
+                gradient.addColorStop(0.18, 'rgba(220,210,255,0.7)');
+                gradient.addColorStop(0.4, 'rgba(160,140,220,0.3)');
+                gradient.addColorStop(0.65, 'rgba(80,60,160,0.07)');
+                gradient.addColorStop(1, 'rgba(0,0,0,0)');
+                octx.fillStyle = gradient;
+                octx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+                return offCanvas;
+            }
+
+            function initGlowSprites() {
+                glowSizes.forEach(s => {
+                    glowSprites[s] = createGlowSprite(s);
+                });
+            }
+            initGlowSprites();
+
+            // ─────────────────────────────────────
+            // GALAXY STAR GENERATION
+            // ─────────────────────────────────────
+            const galaxyStars = [];
+            const backgroundStars = [];
+            const spaceDustParticles = [];
+            const GALAXY_MAX_RADIUS = 620;
+            const CORE_RADIUS = 70;
+            const NUM_ARMS = 4;
+            const ARM_STARS_PER_ARM = 550;
+            const CORE_STARS_COUNT = 500;
+            const HALO_STARS_COUNT = 350;
+            const BG_STARS_COUNT = 250;
+            const DUST_COUNT = 180;
+
+            function gaussianRandom(mean = 0, stdev = 1) {
+                let u = 1 - Math.random();
+                let v = Math.random();
+                let z = Math.sqrt(-2.0 * Math.log(Math.max(u, 0.0001))) * Math.cos(2.0 * Math.PI * v);
+                return z * stdev + mean;
+            }
+
+            function clamp(val, min, max) {
+                return Math.max(min, Math.min(max, val));
+            }
+
+            function generateGalaxyStars() {
+                galaxyStars.length = 0;
+                const spiralTightness = 0.55;
+                const armScatter = 0.28;
+
+                // Spiral arm stars
+                for (let arm = 0; arm < NUM_ARMS; arm++) {
+                    const armBaseAngle = (arm / NUM_ARMS) * Math.PI * 2;
+                    for (let i = 0; i < ARM_STARS_PER_ARM; i++) {
+                        const t = i / ARM_STARS_PER_ARM;
+                        const radius = CORE_RADIUS * 0.6 + t * (GALAXY_MAX_RADIUS - CORE_RADIUS * 0.4);
+                        const spiralAngle = armBaseAngle + Math.log(radius / (CORE_RADIUS * 0.5 + 1)) / spiralTightness;
+                        const scatterAngle = gaussianRandom(0, armScatter * (0.5 + t * 0.8));
+                        const scatterRadial = gaussianRandom(0, radius * 0.04 * (0.6 + t * 0.5));
+                        const finalRadius = clamp(radius + scatterRadial, 1, GALAXY_MAX_RADIUS);
+                        const finalAngle = spiralAngle + scatterAngle;
+
+                        const distFromCore = finalRadius / GALAXY_MAX_RADIUS;
+                        const brightnessBase = 0.35 + Math.random() * 0.65;
+                        const brightnessFalloff = 1.0 - distFromCore * 0.55;
+                        const brightness = clamp(brightnessBase * brightnessFalloff, 0.08, 1.0);
+
+                        let color;
+                        const colorRand = Math.random();
+                        if (distFromCore < 0.2) {
+                            color = colorRand < 0.6 ? '#FFFEF8' : (colorRand < 0.85 ? '#FFF8E0' : '#E8D8FF');
+                        } else if (distFromCore < 0.5) {
+                            color = colorRand < 0.4 ? '#F8F4FF' : (colorRand < 0.7 ? '#E0D8FF' :
+                                '#C8D0FF');
+                        } else if (distFromCore < 0.75) {
+                            color = colorRand < 0.35 ? '#D8D0FF' : (colorRand < 0.65 ? '#B0C0FF' :
+                                '#C0B8F0');
+                        } else {
+                            color = colorRand < 0.5 ? '#A0B8F0' : '#9080D0';
+                        }
+
+                        const size = 0.4 + Math.random() * 3.2 * (1.0 - distFromCore * 0.5) * brightness;
+
+                        galaxyStars.push({
+                            r: finalRadius,
+                            angle: finalAngle,
+                            size: size,
+                            brightness: brightness,
+                            color: color,
+                            type: 'arm',
+                            armIndex: arm,
+                            twinkleOffset: Math.random() * Math.PI * 2,
+                            twinkleSpeed: 0.3 + Math.random() * 1.8,
+                        });
+                    }
+                }
+
+                // Core stars
+                for (let i = 0; i < CORE_STARS_COUNT; i++) {
+                    const radius = Math.abs(gaussianRandom(0, CORE_RADIUS * 0.38));
+                    const clampedRadius = clamp(radius, 0.2, CORE_RADIUS * 1.6);
+                    const angle = Math.random() * Math.PI * 2;
+                    const brightness = clamp(0.55 + Math.random() * 0.45 - (clampedRadius / CORE_RADIUS) * 0.35, 0.1,
+                        1.0);
+                    const colorRand = Math.random();
+                    const color = colorRand < 0.7 ? '#FFFEFA' : (colorRand < 0.9 ? '#FFF6E8' : '#E8D8FF');
+                    const size = 0.5 + Math.random() * 4.5 * (1.0 - clampedRadius / (CORE_RADIUS * 1.6)) * brightness;
+
+                    galaxyStars.push({
+                        r: clampedRadius,
+                        angle: angle,
+                        size: size,
+                        brightness: brightness,
+                        color: color,
+                        type: 'core',
+                        armIndex: -1,
+                        twinkleOffset: Math.random() * Math.PI * 2,
+                        twinkleSpeed: 0.5 + Math.random() * 2.5,
+                    });
+                }
+
+                // Halo stars
+                for (let i = 0; i < HALO_STARS_COUNT; i++) {
+                    const radius = CORE_RADIUS * 0.5 + Math.random() * GALAXY_MAX_RADIUS * 1.3;
+                    const angle = Math.random() * Math.PI * 2;
+                    const brightness = clamp(0.08 + Math.random() * 0.45, 0.04, 0.55);
+                    const colorRand = Math.random();
+                    const color = colorRand < 0.5 ? '#C0C8F0' : (colorRand < 0.8 ? '#A0A8E0' : '#D0C8F8');
+                    const size = 0.2 + Math.random() * 1.8 * brightness;
+
+                    galaxyStars.push({
+                        r: radius,
+                        angle: angle,
+                        size: size,
+                        brightness: brightness,
+                        color: color,
+                        type: 'halo',
+                        armIndex: -1,
+                        twinkleOffset: Math.random() * Math.PI * 2,
+                        twinkleSpeed: 0.2 + Math.random() * 1.2,
+                    });
+                }
+            }
+
+            function generateBackgroundStars() {
+                backgroundStars.length = 0;
+                const bgSpread = GALAXY_MAX_RADIUS * 3.5;
+                for (let i = 0; i < BG_STARS_COUNT; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = 200 + Math.random() * bgSpread;
+                    const brightness = 0.06 + Math.random() * 0.5;
+                    const size = 0.15 + Math.random() * 1.2;
+                    const colorRand = Math.random();
+                    const color = colorRand < 0.5 ? '#E8E8F8' : (colorRand < 0.8 ? '#D0D8FF' : '#C8C0E8');
+                    backgroundStars.push({
+                        r: radius,
+                        angle: angle,
+                        size: size,
+                        brightness: brightness,
+                        color: color,
+                        twinkleOffset: Math.random() * Math.PI * 2,
+                        twinkleSpeed: 0.1 + Math.random() * 0.7,
+                    });
+                }
+            }
+
+            function generateSpaceDust() {
+                spaceDustParticles.length = 0;
+                for (let i = 0; i < DUST_COUNT; i++) {
+                    spaceDustParticles.push({
+                        x: (Math.random() - 0.5) * GALAXY_MAX_RADIUS * 2.8,
+                        y: (Math.random() - 0.5) * GALAXY_MAX_RADIUS * 2.8,
+                        size: 0.3 + Math.random() * 1.5,
+                        alpha: 0.04 + Math.random() * 0.25,
+                        color: Math.random() < 0.5 ? '#B0C0F0' : '#D0D0F8',
+                        driftX: (Math.random() - 0.5) * 0.25,
+                        driftY: (Math.random() - 0.5) * 0.25,
+                        twinkleOffset: Math.random() * Math.PI * 2,
+                        twinkleSpeed: 0.08 + Math.random() * 0.4,
+                    });
+                }
+            }
+
+            generateGalaxyStars();
+            generateBackgroundStars();
+            generateSpaceDust();
+
+            // ─────────────────────────────────────
+            // CAMERA STATE
+            // ─────────────────────────────────────
+            const camera = {
+                x: 0,
+                y: 0,
+                zoom: 0.85,
+                targetX: 0,
+                targetY: 0,
+                targetZoom: 0.85,
+                rotation: 0,
+                zoomVelocity: 0,
+            };
+
+            // ─────────────────────────────────────
+            // INPUT STATE
+            // ─────────────────────────────────────
+            const mouse = {
+                x: centerX,
+                y: centerY,
+                prevX: centerX,
+                prevY: centerY,
+                isDown: false,
+                dragStartX: 0,
+                dragStartY: 0,
+                dragMoved: false,
+            };
+
+            const touches = {
+                active: new Map(),
+                pinchStartDist: 0,
+                pinchStartZoom: 0,
+                isPinching: false,
+            };
+
+            // ─────────────────────────────────────
+            // CLICK BURST PARTICLES
+            // ─────────────────────────────────────
+            const burstParticles = [];
+
+            function spawnBurst(screenX, screenY) {
+                const worldX = (screenX - centerX) / camera.zoom + camera.x;
+                const worldY = (screenY - centerY) / camera.zoom + camera.y;
+                const count = 60 + Math.floor(Math.random() * 50);
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 60 + Math.random() * 350;
+                    const life = 0.5 + Math.random() * 1.6;
+                    const size = 0.6 + Math.random() * 3.5;
+                    const colorRand = Math.random();
+                    const color = colorRand < 0.35 ? '#FFFFFF' : (colorRand < 0.65 ? '#D0D8FF' : '#C0B0F0');
+                    burstParticles.push({
+                        x: worldX,
+                        y: worldY,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        life: life,
+                        maxLife: life,
+                        size: size,
+                        color: color,
+                    });
+                }
+                // Limit burst particles
+                if (burstParticles.length > 600) {
+                    burstParticles.splice(0, burstParticles.length - 600);
+                }
+            }
+
+            // ─────────────────────────────────────
+            // WARP STREAKS
+            // ─────────────────────────────────────
+            const warpStreaks = [];
+
+            function spawnWarpStreaks(intensity) {
+                const count = Math.floor(intensity * 35);
+                const galaxyScreenX = (0 - camera.x) * camera.zoom + centerX;
+                const galaxyScreenY = (0 - camera.y) * camera.zoom + centerY;
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = 80 + Math.random() * Math.max(W, H) * 0.7;
+                    const life = 0.15 + Math.random() * 0.5;
+                    warpStreaks.push({
+                        sx: galaxyScreenX + Math.cos(angle) * dist * 0.3,
+                        sy: galaxyScreenY + Math.sin(angle) * dist * 0.3,
+                        angle: angle,
+                        length: dist * intensity * (0.3 + Math.random() * 0.7),
+                        life: life,
+                        maxLife: life,
+                        alpha: intensity * (0.3 + Math.random() * 0.7),
+                    });
+                }
+                if (warpStreaks.length > 200) {
+                    warpStreaks.splice(0, warpStreaks.length - 200);
+                }
+            }
+
+            // ─────────────────────────────────────
+            // EVENT HANDLERS
+            // ─────────────────────────────────────
+            canvas.addEventListener('mousedown', (e) => {
+                mouse.isDown = true;
+                mouse.dragStartX = e.clientX;
+                mouse.dragStartY = e.clientY;
+                mouse.dragMoved = false;
+                mouse.prevX = e.clientX;
+                mouse.prevY = e.clientY;
+            });
+
+            window.addEventListener('mouseup', (e) => {
+                if (mouse.isDown && !mouse.dragMoved) {
+                    // It's a click
+                    spawnBurst(e.clientX, e.clientY);
+                }
+                mouse.isDown = false;
+                mouse.dragMoved = false;
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+                if (mouse.isDown) {
+                    const dx = e.clientX - mouse.prevX;
+                    const dy = e.clientY - mouse.prevY;
+                    const totalDrag = Math.abs(e.clientX - mouse.dragStartX) + Math.abs(e.clientY - mouse
+                        .dragStartY);
+                    if (totalDrag > 3) {
+                        mouse.dragMoved = true;
+                    }
+                    if (mouse.dragMoved) {
+                        camera.targetX -= dx / camera.zoom;
+                        camera.targetY -= dy / camera.zoom;
+                    }
+                    mouse.prevX = e.clientX;
+                    mouse.prevY = e.clientY;
+                }
+                // Parallax (only when not dragging)
+                if (!mouse.isDown) {
+                    const parallaxStrength = 0.015;
+                    const px = (e.clientX - centerX) * parallaxStrength;
+                    const py = (e.clientY - centerY) * parallaxStrength;
+                    camera.targetX = px;
+                    camera.targetY = py;
+                }
+            });
+
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const zoomDelta = -e.deltaY * 0.001;
+                const oldZoom = camera.targetZoom;
+                const newZoom = clamp(camera.targetZoom * (1 + zoomDelta), 0.18, 4.5);
+
+                // Zoom toward mouse position
+                const mx = e.clientX;
+                const my = e.clientY;
+                const worldXAtMouse = (mx - centerX) / oldZoom + camera.targetX;
+                const worldYAtMouse = (my - centerY) / oldZoom + camera.targetY;
+
+                camera.targetZoom = newZoom;
+                camera.targetX = worldXAtMouse - (mx - centerX) / newZoom;
+                camera.targetY = worldYAtMouse - (my - centerY) / newZoom;
+
+                // Track zoom velocity for warp effect
+                camera.zoomVelocity = (newZoom - oldZoom) * 15;
+                if (Math.abs(camera.zoomVelocity) > 0.25) {
+                    spawnWarpStreaks(Math.min(Math.abs(camera.zoomVelocity), 3.5));
+                }
+            }, { passive: false });
+
+            // Touch support
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                for (const touch of e.changedTouches) {
+                    touches.active.set(touch.identifier, {
+                        x: touch.clientX,
+                        y: touch.clientY,
+                        startX: touch.clientX,
+                        startY: touch.clientY,
+                    });
+                }
+                if (touches.active.size === 2) {
+                    const pts = Array.from(touches.active.values());
+                    const dx = pts[0].x - pts[1].x;
+                    const dy = pts[0].y - pts[1].y;
+                    touches.pinchStartDist = Math.sqrt(dx * dx + dy * dy);
+                    touches.pinchStartZoom = camera.targetZoom;
+                    touches.isPinching = true;
+                }
+                mouse.isDown = touches.active.size === 1;
+                if (mouse.isDown) {
+                    const t = Array.from(touches.active.values())[0];
+                    mouse.dragStartX = t.x;
+                    mouse.dragStartY = t.y;
+                    mouse.prevX = t.x;
+                    mouse.prevY = t.y;
+                    mouse.dragMoved = false;
+                }
+            }, { passive: false });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (const touch of e.changedTouches) {
+                    if (touches.active.has(touch.identifier)) {
+                        touches.active.set(touch.identifier, {
+                            ...touches.active.get(touch.identifier),
+                            x: touch.clientX,
+                            y: touch.clientY,
+                        });
+                    }
+                }
+                if (touches.isPinching && touches.active.size >= 2) {
+                    const pts = Array.from(touches.active.values());
+                    const dx = pts[0].x - pts[1].x;
+                    const dy = pts[0].y - pts[1].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const scale = dist / Math.max(touches.pinchStartDist, 1);
+                    const newZoom = clamp(touches.pinchStartZoom * scale, 0.18, 4.5);
+                    const oldZoom = camera.targetZoom;
+                    const midX = (pts[0].x + pts[1].x) / 2;
+                    const midY = (pts[0].y + pts[1].y) / 2;
+                    const worldXAtMid = (midX - centerX) / oldZoom + camera.targetX;
+                    const worldYAtMid = (midY - centerY) / oldZoom + camera.targetY;
+                    camera.targetZoom = newZoom;
+                    camera.targetX = worldXAtMid - (midX - centerX) / newZoom;
+                    camera.targetY = worldYAtMid - (midY - centerY) / newZoom;
+                    camera.zoomVelocity = (newZoom - oldZoom) * 10;
+                    if (Math.abs(camera.zoomVelocity) > 0.3) {
+                        spawnWarpStreaks(Math.min(Math.abs(camera.zoomVelocity), 3.5));
+                    }
+                } else if (mouse.isDown && touches.active.size === 1) {
+                    const t = Array.from(touches.active.values())[0];
+                    const dx = t.x - mouse.prevX;
+                    const dy = t.y - mouse.prevY;
+                    const totalDrag = Math.abs(t.x - mouse.dragStartX) + Math.abs(t.y - mouse.dragStartY);
+                    if (totalDrag > 5) mouse.dragMoved = true;
+                    if (mouse.dragMoved) {
+                        camera.targetX -= dx / camera.zoom;
+                        camera.targetY -= dy / camera.zoom;
+                    }
+                    mouse.prevX = t.x;
+                    mouse.prevY = t.y;
+                }
+            }, { passive: false });
+
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                for (const touch of e.changedTouches) {
+                    touches.active.delete(touch.identifier);
+                }
+                if (touches.active.size < 2) {
+                    touches.isPinching = false;
+                }
+                if (touches.active.size === 0) {
+                    if (mouse.isDown && !mouse.dragMoved && !touches.isPinching) {
+                        const lastTouch = Array.from(e.changedTouches)[0];
+                        if (lastTouch) spawnBurst(lastTouch.clientX, lastTouch.clientY);
+                    }
+                    mouse.isDown = false;
+                    mouse.dragMoved = false;
+                }
+            }, { passive: false });
+
+            // ─────────────────────────────────────
+            // NEBULA RENDERING
+            // ─────────────────────────────────────
+            function drawNebulae(time) {
+                const nebulaDefs = [
+                    { wx: 0, wy: 0, rx: 280, ry: 200, rot: 0.3, color: '180,140,220', alpha: 0.08 },
+                    { wx: 40, wy: -30, rx: 180, ry: 130, rot: -0.2, color: '140,160,240', alpha: 0.06 },
+                    { wx: -50, wy: 20, rx: 200, ry: 150, rot: 0.5, color: '160,120,210', alpha: 0.07 },
+                    { wx: 80, wy: 60, rx: 150, ry: 100, rot: -0.4, color: '130,150,230', alpha: 0.05 },
+                    { wx: -70, wy: -50, rx: 170, ry: 120, rot: 0.7, color: '170,150,220', alpha: 0.06 },
+                    { wx: 20, wy: 80, rx: 140, ry: 90, rot: -0.6, color: '150,130,210', alpha: 0.05 },
+                    { wx: -30, wy: -70, rx: 160, ry: 110, rot: 0.9, color: '155,145,225', alpha: 0.055 },
+                    { wx: 100, wy: -40, rx: 130, ry: 85, rot: -0.3, color: '135,155,235', alpha: 0.04 },
+                ];
+
+                for (const neb of nebulaDefs) {
+                    const sx = (neb.wx - camera.x) * camera.zoom + centerX;
+                    const sy = (neb.wy - camera.y) * camera.zoom + centerY;
+                    const scaledRx = neb.rx * camera.zoom;
+                    const scaledRy = neb.ry * camera.zoom;
+
+                    if (sx + scaledRx < -200 || sx - scaledRx > W + 200 || sy + scaledRy < -200 || sy - scaledRy > H +
+                        200) continue;
+
+                    ctx.save();
+                    ctx.globalAlpha = neb.alpha * (0.85 + 0.15 * Math.sin(time * 0.3 + neb.rot));
+                    ctx.translate(sx, sy);
+                    ctx.rotate(neb.rot + Math.sin(time * 0.15) * 0.08);
+                    const gradient = ctx.createRadialGradient(0, 0, scaledRx * 0.05, 0, 0, scaledRx);
+                    gradient.addColorStop(0, `rgba(${neb.color},0.7)`);
+                    gradient.addColorStop(0.25, `rgba(${neb.color},0.35)`);
+                    gradient.addColorStop(0.6, `rgba(${neb.color},0.06)`);
+                    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, scaledRx, scaledRy, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+
+            // ─────────────────────────────────────
+            // MAIN RENDER LOOP
+            // ─────────────────────────────────────
+            let lastTime = performance.now();
+            let galaxyRotationAccum = 0;
+            const GALAXY_ROTATION_SPEED = 0.00035; // radians per frame at 60fps
+
+            function getGlowSpriteSize(starScreenSize) {
+                if (starScreenSize < 0.8) return 4;
+                if (starScreenSize < 2.0) return 8;
+                if (starScreenSize < 5.0) return 16;
+                if (starScreenSize < 12.0) return 32;
+                if (starScreenSize < 28.0) return 64;
+                return 128;
+            }
+
+            function render(timestamp) {
+                requestAnimationFrame(render);
+
+                const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+                lastTime = timestamp;
+                const fpsScale = dt * 60;
+
+                // ── Smooth camera interpolation ─────────────────
+                const smoothFactor = 1 - Math.exp(-8 * dt);
+                camera.zoom += (camera.targetZoom - camera.zoom) * smoothFactor;
+                camera.x += (camera.targetX - camera.x) * smoothFactor;
+                camera.y += (camera.targetY - camera.y) * smoothFactor;
+                camera.zoomVelocity *= Math.exp(-6 * dt);
+
+                // Galaxy rotation
+                galaxyRotationAccum += GALAXY_ROTATION_SPEED * fpsScale;
+                camera.rotation = galaxyRotationAccum;
+
+                // ── Clear ───────────────────────────────────────
+                ctx.clearRect(0, 0, W, H);
+                ctx.fillStyle = '#000008';
+                ctx.fillRect(0, 0, W, H);
+
+                // ── Subtle ambient vignette ────────────────────
+                const vignetteGrad = ctx.createRadialGradient(centerX, centerY, Math.min(W, H) * 0.55, centerX, centerY,
+                    Math.max(W, H) * 0.75);
+                vignetteGrad.addColorStop(0, 'rgba(0,0,0,0)');
+                vignetteGrad.addColorStop(1, 'rgba(0,0,4,0.7)');
+                ctx.fillStyle = vignetteGrad;
+                ctx.fillRect(0, 0, W, H);
+
+                // ── Draw nebulae ───────────────────────────────
+                drawNebulae(timestamp * 0.001);
+
+                // ── Prepare star rendering batches ─────────────
+                const zoom = camera.zoom;
+                const camX = camera.x;
+                const camY = camera.y;
+                const rot = camera.rotation;
+
+                // Group stars by glow sprite size for efficient batching
+                const batches = {};
+                glowSizes.forEach(s => { batches[s] = []; });
+
+                // Collect visible galaxy stars
+                const screenMargin = 80;
+                const visMinX = -screenMargin;
+                const visMaxX = W + screenMargin;
+                const visMinY = -screenMargin;
+                const visMaxY = H + screenMargin;
+
+                const minScreenSizeForRender = 0.25;
+                const lodBrightnessThreshold = zoom < 0.4 ? 0.35 : (zoom < 0.7 ? 0.18 : (zoom < 1.1 ? 0.06 : 0));
+
+                const allStarSources = [
+                    { stars: galaxyStars, useRotation: true },
+                    { stars: backgroundStars, useRotation: false },
+                ];
+
+                for (const source of allStarSources) {
+                    for (const star of source.stars) {
+                        if (star.brightness < lodBrightnessThreshold) continue;
+                        const effAngle = source.useRotation ? star.angle + rot : star.angle;
+                        const wx = star.r * Math.cos(effAngle);
+                        const wy = star.r * Math.sin(effAngle);
+                        const sx = (wx - camX) * zoom + centerX;
+                        const sy = (wy - camY) * zoom + centerY;
+                        const screenSize = star.size * zoom;
+
+                        if (screenSize < minScreenSizeForRender) continue;
+                        if (sx < visMinX || sx > visMaxX || sy < visMinY || sy > visMaxY) continue;
+
+                        const spriteSize = getGlowSpriteSize(screenSize);
+                        batches[spriteSize].push({
+                            sx,
+                            sy,
+                            screenSize,
+                            brightness: star.brightness,
+                            color: star.color,
+                            twinkleOffset: star.twinkleOffset || 0,
+                            twinkleSpeed: star.twinkleSpeed || 0.5,
+                        });
+                    }
+                }
+
+                // ── Render stars by batch ──────────────────────
+                const timeSec = timestamp * 0.001;
+                for (const spriteSize of glowSizes) {
+                    const batch = batches[spriteSize];
+                    if (batch.length === 0) continue;
+                    const sprite = glowSprites[spriteSize];
+                    const spriteHalfW = sprite.width / 2;
+                    const spriteHalfH = sprite.height / 2;
+
+                    for (const star of batch) {
+                        const twinkle = 0.82 + 0.18 * Math.sin(timeSec * star.twinkleSpeed + star.twinkleOffset);
+                        const alpha = clamp(star.brightness * twinkle, 0.03, 1.0);
+                        if (alpha < 0.02) continue;
+
+                        const drawScale = Math.max(star.screenSize / Math.max(spriteSize, 1), 0.35);
+                        const drawW = sprite.width * drawScale;
+                        const drawH = sprite.height * drawScale;
+
+                        ctx.save();
+                        ctx.globalAlpha = alpha;
+                        ctx.drawImage(sprite, star.sx - drawW / 2, star.sy - drawH / 2, drawW, drawH);
+                        ctx.restore();
+
+                        // Tiny colored center for brighter stars
+                        if (star.brightness > 0.35 && star.screenSize > 1.5) {
+                            ctx.save();
+                            ctx.globalAlpha = alpha * 0.7;
+                            ctx.fillStyle = star.color;
+                            ctx.beginPath();
+                            ctx.arc(star.sx, star.sy, star.screenSize * 0.22, 0, Math.PI * 2);
+                            ctx.fill();
+                            ctx.restore();
+                        }
+                    }
+                }
+
+                // ── Space dust ──────────────────────────────────
+                for (const dust of spaceDustParticles) {
+                    const sx = (dust.x - camX) * zoom + centerX;
+                    const sy = (dust.y - camY) * zoom + centerY;
+                    if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) continue;
+                    const twinkle = 0.7 + 0.3 * Math.sin(timeSec * dust.twinkleSpeed + dust.twinkleOffset);
+                    const alpha = clamp(dust.alpha * twinkle, 0.01, 0.6);
+                    const size = dust.size * zoom;
+                    if (size < 0.3) continue;
+                    ctx.save();
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = dust.color;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                // ── Update & draw burst particles ──────────────
+                for (let i = burstParticles.length - 1; i >= 0; i--) {
+                    const p = burstParticles[i];
+                    p.life -= dt;
+                    if (p.life <= 0) {
+                        burstParticles.splice(i, 1);
+                        continue;
+                    }
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+                    p.vx *= 0.985;
+                    p.vy *= 0.985;
+                    const sx = (p.x - camX) * zoom + centerX;
+                    const sy = (p.y - camY) * zoom + centerY;
+                    if (sx < -50 || sx > W + 50 || sy < -50 || sy > H + 50) continue;
+                    const lifeRatio = p.life / p.maxLife;
+                    const alpha = lifeRatio;
+                    const size = p.size * zoom * lifeRatio;
+                    ctx.save();
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = p.color;
+                    ctx.shadowColor = p.color;
+                    ctx.shadowBlur = size * 3;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, Math.max(size, 0.3), 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    ctx.restore();
+                }
+
+                // ── Update & draw warp streaks ─────────────────
+                for (let i = warpStreaks.length - 1; i >= 0; i--) {
+                    const ws = warpStreaks[i];
+                    ws.life -= dt;
+                    if (ws.life <= 0) {
+                        warpStreaks.splice(i, 1);
+                        continue;
+                    }
+                    const lifeRatio = ws.life / ws.maxLife;
+                    const alpha = ws.alpha * lifeRatio;
+                    const endX = ws.sx + Math.cos(ws.angle) * ws.length * lifeRatio;
+                    const endY = ws.sy + Math.sin(ws.angle) * ws.length * lifeRatio;
+                    ctx.save();
+                    ctx.globalAlpha = alpha;
+                    ctx.strokeStyle = '#D0D8FF';
+                    ctx.lineWidth = 0.6 + lifeRatio * 1.8;
+                    ctx.shadowColor = '#A0B8FF';
+                    ctx.shadowBlur = 6;
+                    ctx.beginPath();
+                    ctx.moveTo(ws.sx, ws.sy);
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                    ctx.restore();
+                }
+
+                // ── Galactic core bright glow ──────────────────
+                const coreSX = (0 - camX) * zoom + centerX;
+                const coreSY = (0 - camY) * zoom + centerY;
+                const coreGlowRadius = CORE_RADIUS * zoom * 0.9;
+                if (coreSX > -300 && coreSX < W + 300 && coreSY > -300 && coreSY < H + 300) {
+                    const coreGrad = ctx.createRadialGradient(coreSX, coreSY, coreGlowRadius * 0.05, coreSX, coreSY,
+                        coreGlowRadius);
+                    coreGrad.addColorStop(0, 'rgba(255,250,240,0.55)');
+                    coreGrad.addColorStop(0.1, 'rgba(255,245,225,0.3)');
+                    coreGrad.addColorStop(0.35, 'rgba(220,200,240,0.12)');
+                    coreGrad.addColorStop(0.7, 'rgba(140,120,200,0.03)');
+                    coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+                    ctx.save();
+                    ctx.fillStyle = coreGrad;
+                    ctx.beginPath();
+                    ctx.arc(coreSX, coreSY, coreGlowRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                // ── Fade UI hints after interaction ────────────
+                const totalInteraction = Math.abs(camera.zoomVelocity) + (mouse.dragMoved ? 0.5 : 0);
+                if (totalInteraction > 0.02 || burstParticles.length > 0) {
+                    uiHints.style.opacity = Math.max(0, parseFloat(uiHints.style.opacity || 0.7) - dt * 0.4);
+                } else {
+                    uiHints.style.opacity = Math.min(0.7, parseFloat(uiHints.style.opacity || 0.7) + dt * 0.25);
+                }
+
+                // ── Update space dust drift ────────────────────
+                for (const dust of spaceDustParticles) {
+                    dust.x += dust.driftX * fpsScale;
+                    dust.y += dust.driftY * fpsScale;
+                    const maxDist = GALAXY_MAX_RADIUS * 2.8;
+                    if (Math.abs(dust.x) > maxDist) dust.driftX *= -1;
+                    if (Math.abs(dust.y) > maxDist) dust.driftY *= -1;
+                }
+            }
+
+            // ─────────────────────────────────────
+            // START
+            // ─────────────────────────────────────
+            camera.zoom = camera.targetZoom;
+            camera.x = camera.targetX;
+            camera.y = camera.targetY;
+            uiHints.style.opacity = '0.7';
+            requestAnimationFrame(render);
+
+            // ─────────────────────────────────────
+            // KEYBOARD SHORTCUTS
+            // ─────────────────────────────────────
+            window.addEventListener('keydown', (e) => {
+                switch (e.key.toLowerCase()) {
+                    case 'r':
+                        // Reset view
+                        camera.targetZoom = 0.85;
+                        camera.targetX = 0;
+                        camera.targetY = 0;
+                        break;
+                    case 'f':
+                        // Zoom to fit galaxy
+                        camera.targetZoom = 0.55;
+                        camera.targetX = 0;
+                        camera.targetY = 0;
+                        break;
+                    case 'z':
+                        // Zoom in to core
+                        camera.targetZoom = 2.8;
+                        camera.targetX = 0;
+                        camera.targetY = 0;
+                        break;
+                    case '0':
+                        // Reset completely
+                        camera.targetZoom = 0.85;
+                        camera.targetX = 0;
+                        camera.targetY = 0;
+                        galaxyRotationAccum = 0;
+                        burstParticles.length = 0;
+                        warpStreaks.length = 0;
+                        break;
+                    default:
+                        break;
+                }
+            });
+
+            console.log('%c🌌 COSMIC ZOOM GALAXY %cReady',
+                'font-size:18px;color:#c8d0ff;',
+                'font-size:14px;color:#aaa;');
+            console.log('%c🖱 Scroll to zoom | ✦ Move mouse for parallax | 🖱 Drag to pan | 💫 Click for star burst',
+                'color:#8899cc;');
+            console.log('%c⌨ Keys: R=Reset F=Fit Z=ZoomCore 0=FullReset',
+                'color:#6677aa;font-size:11px;');
+        })();
+    </script>
+</body>
+</html>
